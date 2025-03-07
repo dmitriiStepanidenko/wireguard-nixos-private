@@ -156,7 +156,7 @@ in {
         serviceConfig = {
           Type = "simple";
           Restart = "always";
-          RestartSec = "${cfg.watchdog.interval}s";
+          RestartSec = "${toString cfg.watchdog.interval}s";
           User = "root";
         };
 
@@ -166,19 +166,19 @@ in {
             if ! ip link show ${cfg.interface} &> /dev/null; then
               echo "WireGuard interface ${cfg.interface} not found. Restarting service..."
               systemctl restart wireguard-setup.service
-              sleep ${cfg.watchdog.interval}
+              sleep ${toString cfg.watchdog.interval}
               continue
             fi
 
             # Try to ping through the WireGuard interface
-            if ! ${pkgs.unixtools.ping}/bin/ping -I ${cfg.interface} -c ${cfg.watchdog.pingCount} -W ${cfg.watchdog.pingTimeout} ${cfg.watchdog.pingIP} &> /dev/null; then
+            if ! ${pkgs.unixtools.ping}/bin/ping -I ${cfg.interface} -c ${toString cfg.watchdog.pingCount} -W ${toString cfg.watchdog.pingTimeout} ${toString cfg.watchdog.pingIP} &> /dev/null; then
               echo "Ping to ${cfg.watchdog.pingIP} failed. Restarting WireGuard service..."
               systemctl restart wireguard-setup.service
             else
               echo "Ping to ${cfg.watchdog.pingIP} successful. WireGuard connection is working."
             fi
 
-            # sleep ${cfg.watchdog.interval}
+            # sleep ${toString cfg.watchdog.interval}
           done
         '';
       };
