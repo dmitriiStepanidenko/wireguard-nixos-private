@@ -3,16 +3,24 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = {self, ...}: {
-    # NixOS modules
-    nixosModules = {
-      wireguard = import ./wireguard.nix;
-      default = self.nixosModules.wireguard;
+  outputs = {
+    self,
+    flake-utils,
+    nixpkgs,
+    ...
+  }:
+    flake-utils.lib.eachDefaultSystem (
+      system: let
+        pkgs = nixpkgs.legacyPackages.${system};
+      in {
+      }
+    )
+    // {
+      nixosModules.default = import ./wireguard.nix;
+      # For backwards compatibility
+      nixosModule = self.nixosModules.default;
     };
-
-    # For backwards compatibility
-    nixosModule = self.nixosModules.default;
-  };
 }
