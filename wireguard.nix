@@ -171,7 +171,7 @@ in {
             fi
 
             # Try to ping through the WireGuard interface
-            if ! ${pkgs.nixtools.ping}/bin/ping -I ${cfg.interface} -c ${toString cfg.watchdog.pingCount} -W ${toString cfg.watchdog.pingTimeout} ${cfg.watchdog.pingIP} &> /dev/null; then
+            if ! ${pkgs.unixtools.ping}/bin/ping -I ${cfg.interface} -c ${toString cfg.watchdog.pingCount} -W ${toString cfg.watchdog.pingTimeout} ${cfg.watchdog.pingIP} &> /dev/null; then
               echo "Ping to ${cfg.watchdog.pingIP} failed. Restarting WireGuard service..."
               systemctl restart wireguard-setup.service
             else
