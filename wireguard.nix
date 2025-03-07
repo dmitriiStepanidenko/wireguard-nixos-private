@@ -61,6 +61,33 @@ in {
       default = [];
       description = "WireGuard peers configuration";
     };
+    watchdog = {
+      enable = mkEnableOption "Enable WireGuard watchdog service";
+
+      pingIP = mkOption {
+        type = types.str;
+        description = "IP address to ping for connectivity check";
+        example = "10.0.0.1";
+      };
+
+      interval = mkOption {
+        type = types.int;
+        default = 30;
+        description = "Interval in seconds between connectivity checks";
+      };
+
+      pingCount = mkOption {
+        type = types.int;
+        default = 3;
+        description = "Number of pings to send for each check";
+      };
+
+      pingTimeout = mkOption {
+        type = types.int;
+        default = 5;
+        description = "Timeout in seconds for ping";
+      };
+    };
   };
 
   config = mkIf cfg.enable (let
@@ -88,40 +115,75 @@ in {
     ];
 
     networking.firewall.allowedUDPPorts = [cfg.listenPort];
+    systemd.services = {
+      "wireguard-setup" = {
+        description = "Setup WireGuard with secrets";
+        wantedBy = ["multi-user.target"];
+        after = ["network-online.target" "nss-lookup.target"];
+        wants = ["network-online.target" "nss-lookup.target"];
+        path = with pkgs; [kmod iproute2 wireguard-tools];
 
-    systemd.services."wireguard-setup" = {
-      description = "Setup WireGuard with secrets";
-      wantedBy = ["multi-user.target"];
-      after = ["network-online.target" "nss-lookup.target"];
-      wants = ["network-online.target" "nss-lookup.target"];
-      path = with pkgs; [kmod iproute2 wireguard-tools];
+        serviceConfig = {
+          Type = "oneshot";
+          RemainAfterExit = true;
+          User = "root";
+          NetworkNamespacePath = "";
+        };
 
-      serviceConfig = {
-        Type = "oneshot";
-        RemainAfterExit = true;
-        User = "root";
-        NetworkNamespacePath = "";
+        script = ''
+          if ip link show ${cfg.interface} &> /dev/null; then
+            echo "${cfg.interface} interface exists. Deleting it... "
+            ip link delete ${cfg.interface}
+            echo "${cfg.interface} interface deleted."
+          else
+            echo "${cfg.interface} interface does not exist."
+          fi
+
+          ip link add dev ${cfg.interface} type wireguard
+          ip address add dev ${cfg.interface} ${cfg.ips}
+
+          ${wgScript}
+
+          ip link set up dev ${cfg.interface}
+        '';
       };
+      "wireguard-watchdog" = mkIf cfg.watchdog.enable {
+        description = "WireGuard connection watchdog";
+        after = ["wireguard-setup.service"];
+        wants = ["wireguard-setup.service"];
+        path = with pkgs; [iproute2 iputils];
 
-      script = ''
-        if ip link show ${cfg.interface} &> /dev/null; then
-          echo "${cfg.interface} interface exists. Deleting it... "
-          ip link delete ${cfg.interface}
-          echo "${cfg.interface} interface deleted."
-        else
-          echo "${cfg.interface} interface does not exist."
-        fi
+        serviceConfig = {
+          Type = "simple";
+          Restart = "always";
+          RestartSec = "${cfg.watchdog.interval}s";
+          User = "root";
+        };
 
-        ip link add dev ${cfg.interface} type wireguard
-        ip address add dev ${cfg.interface} ${cfg.ips}
+        script = ''
+          while true; do
+            # Check if the interface is up
+            if ! ip link show ${cfg.interface} &> /dev/null; then
+              echo "WireGuard interface ${cfg.interface} not found. Restarting service..."
+              systemctl restart wireguard-setup.service
+              sleep ${toString cfg.watchdog.interval}
+              continue
+            fi
 
-        ${wgScript}
+            # Try to ping through the WireGuard interface
+            if ! ${pkgs.nixtools.ping}/bin/ping -I ${cfg.interface} -c ${toString cfg.watchdog.pingCount} -W ${toString cfg.watchdog.pingTimeout} ${cfg.watchdog.pingIP} &> /dev/null; then
+              echo "Ping to ${cfg.watchdog.pingIP} failed. Restarting WireGuard service..."
+              systemctl restart wireguard-setup.service
+            else
+              echo "Ping to ${cfg.watchdog.pingIP} successful. WireGuard connection is working."
+            fi
 
-        ip link set up dev ${cfg.interface}
-      '';
+            # sleep ${toString cfg.watchdog.interval}
+          done
+        '';
+      };
     };
 
     systemd.network.wait-online.ignoredInterfaces = [cfg.interface];
   });
 }
-
