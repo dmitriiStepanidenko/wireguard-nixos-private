@@ -150,7 +150,7 @@ in {
         };
         "wireguard-watchdog" = mkIf cfg.watchdog.enable {
           description = "WireGuard connection watchdog";
-          path = with pkgs; [iproute2 iputils unixtools.ping];
+          path = with pkgs; [iproute2 iputils unixtools.ping logger];
 
           serviceConfig = {
             Type = "oneshot";
@@ -158,7 +158,7 @@ in {
           };
 
           script = ''
-            exec 1> >(logger -s -t $(basename $0)) 2>&1 || true
+            exec 1> >(${pkgs.logger}/bin/logger -s -t $(basename $0)) 2>&1 || true
             # Check if the interface is up
             if ! ip link show ${cfg.interface} &> /dev/null; then
               echo "WireGuard interface ${cfg.interface} not found. Restarting service..."
