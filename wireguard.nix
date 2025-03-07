@@ -115,59 +115,55 @@ in {
     ];
 
     networking.firewall.allowedUDPPorts = [cfg.listenPort];
-    systemd.services = {
-      "wireguard-setup" = {
-        description = "Setup WireGuard with secrets";
-        wantedBy = ["multi-user.target"];
-        after = ["network-online.target" "nss-lookup.target"];
-        wants = ["network-online.target" "nss-lookup.target"];
-        path = with pkgs; [kmod iproute2 wireguard-tools];
+    systemd = {
+      services = {
+        "wireguard-setup" = {
+          description = "Setup WireGuard with secrets";
+          wantedBy = ["multi-user.target"];
+          after = ["network-online.target" "nss-lookup.target"];
+          wants = ["network-online.target" "nss-lookup.target"];
+          path = with pkgs; [kmod iproute2 wireguard-tools];
 
-        serviceConfig = {
-          Type = "oneshot";
-          RemainAfterExit = true;
-          User = "root";
-          NetworkNamespacePath = "";
+          serviceConfig = {
+            Type = "oneshot";
+            RemainAfterExit = true;
+            User = "root";
+            NetworkNamespacePath = "";
+          };
+
+          script = ''
+            if ip link show ${cfg.interface} &> /dev/null; then
+              echo "${cfg.interface} interface exists. Deleting it... "
+              ip link delete ${cfg.interface}
+              echo "${cfg.interface} interface deleted."
+            else
+              echo "${cfg.interface} interface does not exist."
+            fi
+
+            ip link add dev ${cfg.interface} type wireguard
+            ip address add dev ${cfg.interface} ${cfg.ips}
+
+            ${wgScript}
+
+            ip link set up dev ${cfg.interface}
+          '';
         };
+        "wireguard-watchdog" = mkIf cfg.watchdog.enable {
+          description = "WireGuard connection watchdog";
+          path = with pkgs; [iproute2 iputils unixtools.ping];
 
-        script = ''
-          if ip link show ${cfg.interface} &> /dev/null; then
-            echo "${cfg.interface} interface exists. Deleting it... "
-            ip link delete ${cfg.interface}
-            echo "${cfg.interface} interface deleted."
-          else
-            echo "${cfg.interface} interface does not exist."
-          fi
+          serviceConfig = {
+            Type = "oneshot";
+            User = "root";
+          };
 
-          ip link add dev ${cfg.interface} type wireguard
-          ip address add dev ${cfg.interface} ${cfg.ips}
-
-          ${wgScript}
-
-          ip link set up dev ${cfg.interface}
-        '';
-      };
-      "wireguard-watchdog" = mkIf cfg.watchdog.enable {
-        description = "WireGuard connection watchdog";
-        after = ["wireguard-setup.service"];
-        wants = ["wireguard-setup.service"];
-        path = with pkgs; [iproute2 iputils];
-
-        serviceConfig = {
-          Type = "simple";
-          Restart = "always";
-          RestartSec = "${toString cfg.watchdog.interval}s";
-          User = "root";
-        };
-
-        script = ''
-          while true; do
+          script = ''
+            exec 1> >(logger -s -t $(basename $0)) 2>&1 || true
             # Check if the interface is up
             if ! ip link show ${cfg.interface} &> /dev/null; then
               echo "WireGuard interface ${cfg.interface} not found. Restarting service..."
               systemctl restart wireguard-setup.service
-              sleep ${toString cfg.watchdog.interval}
-              continue
+              exit 0
             fi
 
             # Try to ping through the WireGuard interface
@@ -178,12 +174,23 @@ in {
               echo "Ping to ${cfg.watchdog.pingIP} successful. WireGuard connection is working."
             fi
 
-            # sleep ${toString cfg.watchdog.interval}
-          done
-        '';
+          '';
+        };
       };
-    };
+      # Add timer to trigger the watchdog service
+      timers."wireguard-watchdog" = mkIf cfg.watchdog.enable {
+        description = "Timer for WireGuard connection watchdog";
+        wantedBy = ["timers.target"];
+        after = ["wireguard-setup.service"];
 
-    systemd.network.wait-online.ignoredInterfaces = [cfg.interface];
+        timerConfig = {
+          OnBootSec = "1min";
+          OnUnitActiveSec = "${toString cfg.watchdog.interval}s";
+          AccuracySec = "1s";
+        };
+      };
+
+      network.wait-online.ignoredInterfaces = [cfg.interface];
+    };
   });
 }
